@@ -708,6 +708,25 @@ header {
 }
 .cross-toggle.on .cross-pill { background: #f59e0b; color: #1a0f00; }
 
+/* ── Chairman mode ── */
+.chairman-bar {
+    display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+    background: #0a0a18; border-bottom: 2px solid #2a1f6e; flex-shrink: 0; flex-wrap: wrap;
+}
+.chairman-label { font-size: 0.72rem; color: #9ca3af; white-space: nowrap; font-weight: 600; letter-spacing: 0.3px; }
+.chairman-hats  { display: flex; gap: 7px; flex-wrap: wrap; }
+.chairman-hat-btn {
+    display: flex; align-items: center; gap: 5px; cursor: pointer;
+    padding: 5px 13px; border-radius: 20px;
+    font-size: 0.75rem; font-weight: 700;
+    border: 1.5px solid var(--ha, #555); color: var(--hc, #ccc);
+    background: var(--hbg, #111); transition: opacity 0.15s, transform 0.1s, box-shadow 0.15s;
+    user-select: none;
+}
+.chairman-hat-btn:hover { opacity: 0.85; transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0,0,0,0.4); }
+.chairman-hat-btn:active { transform: translateY(0); }
+.rapid-disabled { opacity: 0.35 !important; pointer-events: none !important; }
+
 /* ── Input bar ── */
 .input-bar {
     padding: 8px 16px; border-bottom: 1px solid #1a1a2e;
@@ -973,6 +992,7 @@ header {
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:12px;">
+    <span style="font-size:0.6rem;color:#333;white-space:nowrap">Six Thinking Hats is &copy; The de Bono Group</span>
     <a href="https://www.bgadconsulting.com" target="_blank" rel="noopener noreferrer" class="brand-link">&copy; 2026 BGAD Consulting</a>
     <button class="btn btn-hist hidden" id="historyBtn" onclick="showHistory()">History</button>
     <div class="model-badge">claude-opus-4-6</div>
@@ -1016,6 +1036,10 @@ header {
     🔗 Hats listen to each other
     <span class="cross-pill" id="crossPill">ON</span>
   </div>
+  <div class="cross-toggle" id="chairmanToggle" onclick="toggleChairman()">
+    👔 Chairman mode
+    <span class="cross-pill" id="chairmanPill">OFF</span>
+  </div>
 </div>
 
 <!-- Input bar -->
@@ -1029,6 +1053,13 @@ header {
     <input  type="number" id="rapidRoundsInput" class="rapid-rounds-input" value="3" min="1" max="20" title="Rounds for Auto mode" />
     <label  class="rapid-rounds-label" for="rapidRoundsInput">rounds</label>
   </div>
+</div>
+
+<!-- Chairman picker bar -->
+<div class="chairman-bar hidden" id="chairmanBar">
+  <span class="chairman-label">👔 Pick the next hat:</span>
+  <div class="chairman-hats" id="chairmanHats"></div>
+  <button class="btn btn-judge" style="margin-left:auto" onclick="stopAndSynthesize()">Synthesise</button>
 </div>
 
 <!-- Controls bar -->
@@ -1180,6 +1211,7 @@ let roundInProgress = false;
 let judging         = false;
 let rapidMode       = false;
 let rapidRounds     = 3;
+let chairmanMode    = false;
 let abortCtrl       = null;
 let judgeVer        = 0;
 let transcript      = [];     // { round, hat, text }
@@ -1210,8 +1242,10 @@ function toggleHat(hat_id) {
 function lockHatSelector(locked) {
     document.querySelectorAll('.hat-toggle').forEach(el =>
         el.classList.toggle('disabled', locked));
-    const ct = document.getElementById('crossToggle');
-    if (ct) ct.style.pointerEvents = locked ? 'none' : '';
+    ['crossToggle', 'chairmanToggle'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.pointerEvents = locked ? 'none' : '';
+    });
 }
 
 function toggleCross() {
@@ -1219,6 +1253,47 @@ function toggleCross() {
     crossPollinate = !crossPollinate;
     document.getElementById('crossToggle').classList.toggle('on', crossPollinate);
     document.getElementById('crossPill').textContent = crossPollinate ? 'ON' : 'OFF';
+}
+
+function toggleChairman() {
+    if (roundInProgress || judging) return;
+    chairmanMode = !chairmanMode;
+    document.getElementById('chairmanToggle').classList.toggle('on', chairmanMode);
+    document.getElementById('chairmanPill').textContent = chairmanMode ? 'ON' : 'OFF';
+    // Disable / re-enable Auto mode controls
+    ['rapidBtn', 'rapidRoundsInput'].forEach(id => {
+        document.getElementById(id).classList.toggle('rapid-disabled', chairmanMode);
+    });
+    document.querySelector('.rapid-rounds-label').classList.toggle('rapid-disabled', chairmanMode);
+    // Disable / re-enable hat toggles
+    document.querySelectorAll('.hat-toggle').forEach(el =>
+        el.classList.toggle('disabled', chairmanMode));
+}
+
+// ── Chairman mode helpers ────────────────────────────────────────────────────
+function showChairmanPicker() {
+    const hatsDiv = document.getElementById('chairmanHats');
+    hatsDiv.innerHTML = '';
+    activeHats.forEach(hat_id => {
+        const d   = HAT_DEFS[hat_id];
+        const btn = document.createElement('div');
+        btn.className = 'chairman-hat-btn';
+        btn.setAttribute('data-hat', hat_id);
+        btn.innerHTML  = d.emoji + ' ' + d.label;
+        btn.onclick    = () => callChairmanHat(hat_id);
+        hatsDiv.appendChild(btn);
+    });
+    document.getElementById('chairmanBar').classList.remove('hidden');
+    setStatus('wait', '👔 Chairman — pick the next hat');
+}
+
+function hideChairmanPicker() {
+    document.getElementById('chairmanBar').classList.add('hidden');
+}
+
+function callChairmanHat(hat_id) {
+    hideChairmanPicker();
+    nextRound([hat_id]);
 }
 
 // ── Arena builder ────────────────────────────────────────────────────────────
@@ -1280,7 +1355,10 @@ function startSession(rapid) {
     hide('nextBtn'); hide('resetBtn');
     document.getElementById('nextBtn').textContent = 'Next Round';
 
-    if (rapidMode) {
+    if (chairmanMode) {
+        document.getElementById('rapidBadge').textContent = '👔 Chairman';
+        show('rapidBadge');
+    } else if (rapidMode) {
         document.getElementById('rapidBadge').textContent =
             'Auto \u2022 ' + rapidRounds + ' rounds';
         show('rapidBadge');
@@ -1290,10 +1368,16 @@ function startSession(rapid) {
 
     show('judgeBtn');
     setStatus('idle', 'Starting…');
-    nextRound();
+
+    if (chairmanMode) {
+        roundInProgress = false;
+        showChairmanPicker();
+    } else {
+        nextRound();
+    }
 }
 
-function nextRound() {
+function nextRound(hatsOverride) {
     if (judging || roundInProgress) return;
     roundInProgress = true;
     hide('nextBtn'); hide('resetBtn');
@@ -1304,7 +1388,21 @@ function nextRound() {
     currentCard = null;
     currentText = '';
 
-    if (currentRound > 1) {
+    const hatsForRound = hatsOverride || activeHats;
+
+    // Separators: in chairman mode only add to the speaking hat's panel;
+    // in normal mode add to all panels after round 1.
+    if (chairmanMode) {
+        hatsForRound.forEach(hat_id => {
+            const body = document.getElementById('body-' + hat_id);
+            if (body) {
+                const sep = document.createElement('div');
+                sep.className = 'round-sep';
+                sep.textContent = '— Turn ' + currentRound + ' —';
+                body.appendChild(sep);
+            }
+        });
+    } else if (currentRound > 1) {
         activeHats.forEach(hat_id => {
             const body = document.getElementById('body-' + hat_id);
             if (body) {
@@ -1317,8 +1415,10 @@ function nextRound() {
     }
 
     setRoundCounter();
-    setStatus('idle', 'Round ' + currentRound + ' — starting…');
-    setProgress(0, activeHats.length);
+    setStatus('idle', chairmanMode
+        ? HAT_DEFS[hatsForRound[0]].label + ' thinking…'
+        : 'Round ' + currentRound + ' — starting…');
+    setProgress(0, hatsForRound.length);
 
     if (abortCtrl) abortCtrl.abort();
     abortCtrl = new AbortController();
@@ -1326,7 +1426,7 @@ function nextRound() {
     fetch('/think', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, round: currentRound, hats: activeHats, transcript, cross_pollinate: crossPollinate }),
+        body: JSON.stringify({ question, round: currentRound, hats: hatsForRound, transcript, cross_pollinate: crossPollinate }),
         signal: abortCtrl.signal,
     }).then(resp => {
         const reader  = resp.body.getReader();
@@ -1369,6 +1469,7 @@ function stopAndSynthesize() {
     roundInProgress = false;
     finaliseCurrentCard();
     cleanup();
+    hideChairmanPicker();
     hide('judgeBtn'); hide('nextBtn');
     show('resetBtn');
     setBtn('startBtn', true, 'Start');
@@ -1389,10 +1490,18 @@ function stopAndSynthesize() {
 function resetSession() {
     judging         = false;
     rapidMode       = false;
+    chairmanMode    = false;
     roundInProgress = false;
     crossPollinate  = true;
     document.getElementById('crossToggle').classList.add('on');
     document.getElementById('crossPill').textContent = 'ON';
+    document.getElementById('chairmanToggle').classList.remove('on');
+    document.getElementById('chairmanPill').textContent = 'OFF';
+    ['rapidBtn', 'rapidRoundsInput'].forEach(id => {
+        document.getElementById(id).classList.remove('rapid-disabled');
+    });
+    document.querySelector('.rapid-rounds-label').classList.remove('rapid-disabled');
+    hideChairmanPicker();
     cleanup();
     currentRound  = 0;
     transcript    = [];
@@ -1416,7 +1525,8 @@ function restartSession() {
     const savedQuestion = document.getElementById('question').value;
     resetSession();
     document.getElementById('question').value = savedQuestion;
-    startSession(rapidMode);
+    document.getElementById('question').focus();
+    document.getElementById('question').select();
 }
 
 function cleanup() {
@@ -1493,7 +1603,10 @@ function handleThinkEvent(data) {
             roundInProgress = false;
             cleanup();
             setProgress(activeHats.length, activeHats.length);
-            if (rapidMode) {
+            if (chairmanMode) {
+                setStatus('done', 'Done — pick next hat');
+                showChairmanPicker();
+            } else if (rapidMode) {
                 if (currentRound < rapidRounds) {
                     setStatus('idle', 'Round ' + currentRound + ' / ' + rapidRounds + ' done — next starting…');
                     setTimeout(nextRound, 1200);
@@ -1892,9 +2005,11 @@ function renderCard(card, text, streaming) {
 }
 
 function setRoundCounter() {
-    const label = rapidMode
-        ? 'Round ' + currentRound + ' / ' + rapidRounds
-        : 'Round ' + currentRound;
+    const label = chairmanMode
+        ? 'Turn ' + currentRound
+        : rapidMode
+            ? 'Round ' + currentRound + ' / ' + rapidRounds
+            : 'Round ' + currentRound;
     document.getElementById('roundCounter').textContent = label;
 }
 
